@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Inventory</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+:root {
+  --primary: #2563eb;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --bg: #f1f5f9;
+}
+
+body {
+  margin: 0;
+  font-family: 'Segoe UI', sans-serif;
+  background: var(--bg);
+  display: flex;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 220px;
+  background: #1e293b;
+  color: white;
+  height: 100vh;
+  padding: 20px;
+}
+
+.sidebar h2 {
+  margin-bottom: 20px;
+}
+
+.sidebar button, .sidebar a {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  margin: 8px 0;
+  background: transparent;
+  border: none;
+  color: white;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.sidebar button:hover, .sidebar a:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+/* Main */
+.main {
+  flex: 1;
+  padding: 20px;
+}
+
+/* Cards */
+.card {
+  background: white;
+  padding: 15px;
+  border-radius: 12px;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+}
+
+/* Grid */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 15px;
+}
+
+/* Stats */
+.stats {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 20px;
+}
+
+.stat {
+  flex: 1;
+  background: white;
+  padding: 15px;
+  border-radius: 10px;
+}
+
+/* Inputs */
+input {
+  width: 100%;
+  padding: 10px;
+  margin: 6px 0;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+}
+
+/* Buttons */
+.btn {
+  background: var(--primary);
+  color: white;
+  border: none;
+  padding: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.btn-danger {
+  background: var(--danger);
+}
+
+/* Status */
+.low { color: red; font-weight: bold; }
+.expiring { color: var(--warning); font-weight: bold; }
+.expired { color: darkred; font-weight: bold; }
+
+</style>
+</head>
+
+<body>
+
+<!-- Sidebar -->
+<div class="sidebar">
+  <h2>Inventory</h2>
+  <button onclick="show('dashboard')">Dashboard</button>
+  <button onclick="show('inventory')">Inventory</button>
+  <a href="/logout">Logout</a>
+</div>
+
+<!-- Main -->
+<div class="main">
+
+<!-- Dashboard -->
+<div id="dashboard">
+  <h2>Dashboard</h2>
+
+  <div class="stats">
+    <div class="stat">
+      <h3 id="totalItems">0</h3>
+      <p>Total Items</p>
+    </div>
+    <div class="stat">
+      <h3 id="expiredCount">0</h3>
+      <p>Expired</p>
+    </div>
+    <div class="stat">
+      <h3 id="expiringCount">0</h3>
+      <p>Expiring Soon</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <canvas id="chart"></canvas>
+  </div>
+</div>
+
+<!-- Inventory -->
+<div id="inventory" style="display:none;">
+  <h2>Inventory</h2>
+<div style="display:flex; gap:10px;">
+  <button class="btn btn-danger" onclick="resetForm()">Reset</button>
+</div>
+  <div class="card">
+    <h3>Add Item</h3>
+    <input id="name" placeholder="Item Name">
+    <input id="qty" type="number" placeholder="Quantity">
+    <input id="price" type="number" placeholder="Price">
+    <input id="expiry" type="date">
+    <button class="btn" onclick="addItem()">Add Item</button>
+  </div>
+
+  <br>
+
+  <div id="list" class="grid"></div>
+</div>
+
+</div>
+
+<script>
+const API = ""; // Flask handles routing
+
+let items = [];
+let chart;
+
+// Navigation
+function show(page) {
+  document.getElementById("dashboard").style.display = "none";
+  document.getElementById("inventory").style.display = "none";
+  document.getElementById(page).style.display = "block";
+}
+
+// Expiry Logic
+function getStatus(dateStr) {
+  if (!dateStr) return "";
+
+  const today = new Date();
+  const expiry = new Date(dateStr);
+  const diff = (expiry - today) / (1000 * 60 * 60 * 24);
+
+  if (diff < 0) return "expired";
+  if (diff <= 3) return "expiring";
+  return "";
+}
+
+// Load Data
+async function load() {
+  const res = await fetch("/items");
+  items = await res.json();
+  render();
+  renderChart();
+}
+
+// Add Item
+async function addItem() {
+  const name = document.getElementById("name").value;
+  const quantity = document.getElementById("qty").value;
+  const price = document.getElementById("price").value;
+  const expiry_date = document.getElementById("expiry").value;
+
+  if (!name || !quantity || !price) {
+    alert("Please fill all fields");
+    return;
+  }
+
+  await fetch("/items", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ name, quantity, price, expiry_date })
+  });
+
+  load();
+}
+
+// Delete
+async function remove(id) {
+  await fetch("/items/" + id, { method: "DELETE" });
+  load();
+}
+
+// Render Items
+function render() {
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+
+  let expired = 0, expiring = 0;
+
+  items.forEach(i => {
+    const status = getStatus(i.expiry_date);
+
+    if (status === "expired") expired++;
+    if (status === "expiring") expiring++;
+
+    list.innerHTML += `
+      <div class="card">
+        <h3>${i.name}</h3>
+        <p>Qty: ${i.quantity}</p>
+        <p>₹ ${i.price}</p>
+        <p>Expiry: ${i.expiry_date || "N/A"}</p>
+
+        ${i.low_stock ? '<p class="low">Low Stock</p>' : ''}
+        ${status === "expired" ? '<p class="expired">Expired</p>' : ''}
+        ${status === "expiring" ? '<p class="expiring">Expiring Soon</p>' : ''}
+
+        <button class="btn btn-danger" onclick="remove(${i.id})">Delete</button>
+      </div>
+    `;
+  });
+
+  document.getElementById("totalItems").innerText = items.length;
+  document.getElementById("expiredCount").innerText = expired;
+  document.getElementById("expiringCount").innerText = expiring;
+}
+
+// Chart
+function renderChart() {
+  const ctx = document.getElementById("chart");
+
+  if (chart) chart.destroy();
+
+  chart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: items.map(i => i.name),
+      datasets: [{
+        label: "Stock",
+        data: items.map(i => i.quantity),
+        backgroundColor: "#2563eb"
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } }
+    }
+  });
+}
+// Init
+load();
+</script>
+</body>
+</html>
